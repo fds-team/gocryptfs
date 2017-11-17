@@ -38,6 +38,11 @@ func Derive(path string, purpose Purpose) []byte {
 	return hash[:nametransform.DirIVLen]
 }
 
+type DevIno struct {
+	Dev uint64
+	Ino uint64
+}
+
 // FileIVs contains both IVs that are needed to create a file.
 type FileIVs struct {
 	ID       []byte
@@ -47,9 +52,10 @@ type FileIVs struct {
 // DeriveFile derives both IVs that are needed to create a file and returns them
 // in a container struct.
 func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
+	devino := DevIno{st.Dev, st.Ino}
 	// See if we have that inode number already in the table
 	// (even if Nlink has dropped to 1)
-	v, found := inodeTable.Load(st.Ino)
+	v, found := inodeTable.Load(devino)
 	if found {
 		tlog.Debug.Printf("ino%d: newFile: found in the inode table", st.Ino)
 		fileIVs = v.(FileIVs)
@@ -61,7 +67,7 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
 		// regardless of the path that is used to access the file.
 		// This means that the first path wins.
 		if st.Nlink > 1 {
-			v, found = inodeTable.LoadOrStore(st.Ino, fileIVs)
+			v, found = inodeTable.LoadOrStore(devino, fileIVs)
 			if found {
 				// Another thread has stored a different value before we could.
 				fileIVs = v.(FileIVs)
