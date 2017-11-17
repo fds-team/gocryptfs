@@ -326,3 +326,83 @@ func TestExampleFSv13reverse(t *testing.T) {
 	test_helpers.UnmountPanic(dirC)
 	test_helpers.UnmountPanic(dirB)
 }
+
+// Test that IV changes for plaintext changes in reverse mode
+func TestExampleFSvXXreverse(t *testing.T) {
+	// Prepare directories
+	dirA := "v1.3-reverse"
+	dirB := test_helpers.TmpDir + "/" + dirA + ".D"
+	err := os.Mkdir(dirB, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirC := test_helpers.TmpDir + "/" + dirA + ".E"
+	err = os.Mkdir(dirC, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mount using password
+	test_helpers.MountOrFatal(t, dirA, dirB, "-reverse", "-extpass", "echo test", opensslOpt)
+	c := dirB + "/gocryptfs.conf"
+	if !test_helpers.VerifyExistence(c) {
+		t.Errorf("%s missing", c)
+	}
+	test_helpers.MountOrFatal(t, dirB, dirC, "-extpass", "echo test", opensslOpt)
+	// Test file paths
+	aPath := dirA + "/.testfile"
+	bPath := dirB + "/hYET-ZEfzl1FdXyzaaVyww"
+	cPath := dirC + "/.testfile"
+	// Create a temporary file in directory A
+	fd, err := os.OpenFile(aPath, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+	var buf [10000]byte
+	_, err = fd.WriteAt(buf[:], 0)
+	if err != nil {
+		t.Error(err)
+	}
+	// Save the checksum of the intermediate file
+	encrypted1 := test_helpers.Md5fn(bPath)
+	// Check the unencrypted version
+	want := "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
+	actual := test_helpers.Md5fn(cPath)
+	if actual != want {
+		t.Errorf("wrong md5")
+	}
+	// Update the first block of the file
+	var buf2 [1]byte
+	buf2[0] = 1
+	_, err = fd.WriteAt(buf2[:], 0)
+	if err != nil {
+		t.Error(err)
+	}
+	// Check the unencrypted version
+	want = "1210f0a7381e2d903742e6ea11f386c9"
+	actual = test_helpers.Md5fn(cPath)
+	if actual != want {
+		t.Errorf("wrong md5")
+	}
+	// Change back the content of the file
+	buf2[0] = 0
+	_, err = fd.WriteAt(buf2[:], 0)
+	if err != nil {
+		t.Error(err)
+	}
+	// Save the checksum of the intermediate file
+	encrypted2 := test_helpers.Md5fn(bPath)
+	if encrypted1 == encrypted2 {
+		t.Errorf("Same IVs were used")
+	}
+	// Check the unencrypted version
+	want = "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
+	actual = test_helpers.Md5fn(cPath)
+	if actual != want {
+		t.Errorf("wrong md5")
+	}
+	fd.Close()
+	os.Remove(aPath)
+	// Unmmount
+	test_helpers.UnmountPanic(dirC)
+	test_helpers.UnmountPanic(dirB)
+}
