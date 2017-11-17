@@ -54,15 +54,22 @@ type FileIVs struct {
 // DeriveFile derives both IVs that are needed to create a file and returns them
 // in a container struct.
 func DeriveFile(path string, st syscall.Stat_t) (fileIVs *FileIVs) {
+	numBlocks := (st.Size + contentenc.DefaultBS - 1) / contentenc.DefaultBS
 	devino := DevIno{st.Dev, st.Ino}
 	// See if we have that inode number already in the table
 	v, found := inodeTable.Load(devino)
 	if found {
 		tlog.Debug.Printf("ino%d: newFile: found in the inode table", st.Ino)
 		fileIVs = v.(*FileIVs)
+		// Drop IVs if file was truncated
+		fileIVs.lock.Lock()
+		if numBlocks < int64(len(fileIVs.Blocks)) {
+			fileIVs.Blocks = fileIVs.Blocks[:numBlocks]
+		}
+		fileIVs.lock.Unlock()
 	} else {
 		// Create independent IVs for all blocks of the file
-		blocks := make([]BlockIV, (st.Size + contentenc.DefaultBS - 1) / contentenc.DefaultBS)
+		blocks := make([]BlockIV, numBlocks)
 		for i, _ := range blocks {
 			blocks[i].IV = cryptocore.RandBytes(contentenc.DefaultIVBits / 8)
 		}
