@@ -1,11 +1,19 @@
 package pathiv
 
 import (
+	"syscall"
+
 	"crypto/sha256"
 	"encoding/binary"
 
+	// In newer Go versions, this has moved to just "sync/syncmap".
+	"golang.org/x/sync/syncmap"
+
 	"github.com/rfjakob/gocryptfs/internal/nametransform"
+	"github.com/rfjakob/gocryptfs/internal/tlog"
 )
+
+var inodeTable syncmap.Map
 
 // Purpose identifies for which purpose the IV will be used. This is mixed into the
 // derivation.
@@ -38,9 +46,30 @@ type FileIVs struct {
 
 // DeriveFile derives both IVs that are needed to create a file and returns them
 // in a container struct.
-func DeriveFile(path string) (fileIVs FileIVs) {
-	fileIVs.ID = Derive(path, PurposeFileID)
-	fileIVs.Block0IV = Derive(path, PurposeBlock0IV)
+func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
+	// See if we have that inode number already in the table
+	// (even if Nlink has dropped to 1)
+	v, found := inodeTable.Load(st.Ino)
+	if found {
+		tlog.Debug.Printf("ino%d: newFile: found in the inode table", st.Ino)
+		fileIVs = v.(FileIVs)
+	} else {
+		fileIVs.ID = Derive(path, PurposeFileID)
+		fileIVs.Block0IV = Derive(path, PurposeBlock0IV)
+		// Nlink > 1 means there is more than one path to this file.
+		// Store the derived values so we always return the same data,
+		// regardless of the path that is used to access the file.
+		// This means that the first path wins.
+		if st.Nlink > 1 {
+			v, found = inodeTable.LoadOrStore(st.Ino, fileIVs)
+			if found {
+				// Another thread has stored a different value before we could.
+				fileIVs = v.(FileIVs)
+			} else {
+				tlog.Debug.Printf("ino%d: newFile: Nlink=%d, stored in the inode table", st.Ino, st.Nlink)
+			}
+		}
+	}
 	return fileIVs
 }
 
