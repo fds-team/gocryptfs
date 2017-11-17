@@ -22,7 +22,7 @@ type reverseFile struct {
 	// File header (contains the IV)
 	header contentenc.FileHeader
 	// Initialization vectors
-	fileIVs pathiv.FileIVs
+	fileIVs *pathiv.FileIVs
 	// Content encryption helper
 	contentEnc *contentenc.ContentEnc
 }

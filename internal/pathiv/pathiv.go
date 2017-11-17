@@ -51,15 +51,16 @@ type FileIVs struct {
 
 // DeriveFile derives both IVs that are needed to create a file and returns them
 // in a container struct.
-func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
+func DeriveFile(path string, st syscall.Stat_t) (fileIVs *FileIVs) {
 	devino := DevIno{st.Dev, st.Ino}
 	// See if we have that inode number already in the table
 	// (even if Nlink has dropped to 1)
 	v, found := inodeTable.Load(devino)
 	if found {
 		tlog.Debug.Printf("ino%d: newFile: found in the inode table", st.Ino)
-		fileIVs = v.(FileIVs)
+		fileIVs = v.(*FileIVs)
 	} else {
+		fileIVs = new(FileIVs)
 		fileIVs.ID = Derive(path, PurposeFileID)
 		fileIVs.Block0IV = Derive(path, PurposeBlock0IV)
 		// Nlink > 1 means there is more than one path to this file.
@@ -70,7 +71,7 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
 			v, found = inodeTable.LoadOrStore(devino, fileIVs)
 			if found {
 				// Another thread has stored a different value before we could.
-				fileIVs = v.(FileIVs)
+				fileIVs = v.(*FileIVs)
 			} else {
 				tlog.Debug.Printf("ino%d: newFile: Nlink=%d, stored in the inode table", st.Ino, st.Nlink)
 			}
@@ -80,7 +81,7 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
 }
 
 // BlockIV returns the block IV for block number "blockNo".
-func (fileIVs FileIVs) BlockIV(blockNo uint64) []byte {
+func (fileIVs *FileIVs) BlockIV(blockNo uint64) []byte {
 	iv := make([]byte, len(fileIVs.Block0IV))
 	copy(iv, fileIVs.Block0IV)
 	// Add blockNo to one half of the iv
