@@ -79,11 +79,10 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs FileIVs) {
 	return fileIVs
 }
 
-// BlockIV returns the block IV for block number "blockNo". "block0iv" is the block
-// IV of block #0.
-func BlockIV(block0iv []byte, blockNo uint64) []byte {
-	iv := make([]byte, len(block0iv))
-	copy(iv, block0iv)
+// BlockIV returns the block IV for block number "blockNo".
+func (fileIVs FileIVs) BlockIV(blockNo uint64) []byte {
+	iv := make([]byte, len(fileIVs.Block0IV))
+	copy(iv, fileIVs.Block0IV)
 	// Add blockNo to one half of the iv
 	lowBytes := iv[8:]
 	lowInt := binary.BigEndian.Uint64(lowBytes)

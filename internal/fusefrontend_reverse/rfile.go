@@ -21,8 +21,8 @@ type reverseFile struct {
 	fd *os.File
 	// File header (contains the IV)
 	header contentenc.FileHeader
-	// IV for block 0
-	block0IV []byte
+	// Initialization vectors
+	fileIVs pathiv.FileIVs
 	// Content encryption helper
 	contentEnc *contentenc.ContentEnc
 }
@@ -51,7 +51,7 @@ func (rfs *ReverseFS) newFile(relPath string, flags uint32) (nodefs.File, fuse.S
 		File:       nodefs.NewDefaultFile(),
 		fd:         fd,
 		header:     header,
-		block0IV:   derivedIVs.Block0IV,
+		fileIVs:    derivedIVs,
 		contentEnc: rfs.contentEnc,
 	}, fuse.OK
 }
@@ -66,14 +66,14 @@ func (rf *reverseFile) GetAttr(*fuse.Attr) fuse.Status {
 
 // encryptBlocks - encrypt "plaintext" into a number of ciphertext blocks.
 // "plaintext" must already be block-aligned.
-func (rf *reverseFile) encryptBlocks(plaintext []byte, firstBlockNo uint64, fileID []byte, block0IV []byte) []byte {
+func (rf *reverseFile) encryptBlocks(plaintext []byte, firstBlockNo uint64) []byte {
 	inBuf := bytes.NewBuffer(plaintext)
 	var outBuf bytes.Buffer
 	bs := int(rf.contentEnc.PlainBS())
 	for blockNo := firstBlockNo; inBuf.Len() > 0; blockNo++ {
 		inBlock := inBuf.Next(bs)
-		iv := pathiv.BlockIV(block0IV, blockNo)
-		outBlock := rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, fileID, iv)
+		iv := rf.fileIVs.BlockIV(blockNo)
+		outBlock := rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, iv)
 		outBuf.Write(outBlock)
 	}
 	return outBuf.Bytes()
@@ -98,7 +98,7 @@ func (rf *reverseFile) readBackingFile(off uint64, length uint64) (out []byte, e
 	plaintext = plaintext[0:n]
 
 	// Encrypt blocks
-	ciphertext := rf.encryptBlocks(plaintext, blocks[0].BlockNo, rf.header.ID, rf.block0IV)
+	ciphertext := rf.encryptBlocks(plaintext, blocks[0].BlockNo)
 
 	// Crop down to the relevant part
 	lenHave := len(ciphertext)
