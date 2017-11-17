@@ -294,7 +294,13 @@ func TestExampleFSv13reverse(t *testing.T) {
 	}
 	// Encrypted version of dir1/dir2/file (10000 zero bytes)
 	cPath = dirB + "/zOsW1-BUX54hC2hmhu2EOw/4ZqrpGQdw5r07KR1qw2ZeQ/tfCm9Sp9J_Dvc-jD7J6p8g"
-	want := "9818501d214c5eb42ca2472caf6c82a1"
+	err = syscall.Access(cPath, R_OK)
+	if err != nil {
+		t.Errorf("want nil, got: %v", err)
+	}
+	// Unencrypted version of dir1/dir2/file
+	cPath = dirC + "/dir1/dir2/file"
+	want := "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
 	actual := test_helpers.Md5fn(cPath)
 	if actual != want {
 		t.Errorf("wrong md5")
