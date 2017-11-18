@@ -369,6 +369,6 @@ func handleSigint(srv *fuse.Server, mountpoint string) {
 				cmd.Run()
 			}
 		}
-		os.Exit(exitcodes.SigInt)
+		// Wait until the server shuts down gracefully
 	}()
 }
