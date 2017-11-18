@@ -1,9 +1,14 @@
 package pathiv
 
 import (
+	"io"
+	"os"
 	"syscall"
 	"sync"
+	"time"
+	"encoding/gob"
 	"crypto/sha256"
+	"sync/atomic"
 
 	// In newer Go versions, this has moved to just "sync/syncmap".
 	"golang.org/x/sync/syncmap"
@@ -15,6 +20,7 @@ import (
 )
 
 var inodeTable syncmap.Map
+var ivChanged uint32
 
 // Purpose identifies for which purpose the IV will be used. This is mixed into the
 // derivation.
@@ -66,6 +72,7 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs *FileIVs) {
 		fileIVs.lock.Lock()
 		if numBlocks < int64(len(fileIVs.Blocks)) {
 			fileIVs.Blocks = fileIVs.Blocks[:numBlocks]
+			atomic.StoreUint32(&ivChanged, 1)
 		}
 		fileIVs.lock.Unlock()
 	} else {
@@ -86,6 +93,7 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs *FileIVs) {
 			fileIVs = v.(*FileIVs)
 		} else {
 			tlog.Debug.Printf("ino%d: newFile: stored in the inode table", st.Ino)
+			atomic.StoreUint32(&ivChanged, 1)
 		}
 	}
 	return fileIVs
@@ -101,10 +109,148 @@ func (fileIVs *FileIVs) LockBlockIV(blockNo uint64) *BlockIV {
 			IV: cryptocore.RandBytes(contentenc.DefaultIVBits / 8),
 		}
 		fileIVs.Blocks = append(fileIVs.Blocks, block)
+		atomic.StoreUint32(&ivChanged, 1)
 	}
 	return &fileIVs.Blocks[blockNo]
 }
 
-func (fileIVs *FileIVs) UnlockBlockIV() {
+func (fileIVs *FileIVs) UnlockBlockIV(changed bool) {
+	if changed {
+		atomic.StoreUint32(&ivChanged, 1)
+	}
 	fileIVs.lock.Unlock()
+}
+
+// Load file IVs from the disk
+func LoadFileIVs(file string) {
+	fd, err := os.Open(file)
+	if err != nil {
+		// Failure to load IVs is not critical, assume it doesn't exist yet
+		return
+	}
+	enc := gob.NewDecoder(fd)
+	for {
+		var devino DevIno
+		var fileIVs FileIVs
+		// First decode device and inode number
+		err = enc.Decode(&devino)
+		if err == io.EOF {
+			err = nil
+			break
+		}
+		if err != nil {
+			break
+		}
+		// Then read the associated file IVs struct
+		err = enc.Decode(&fileIVs)
+		if err != nil {
+			break
+		}
+		// And add it to the inode table
+		inodeTable.Store(devino, &fileIVs)
+	}
+	if err != nil {
+		tlog.Warn.Printf("Failed to load file IVs: %s", err.Error())
+	} else {
+		tlog.Debug.Printf("Successfully loaded file IVs")
+	}
+	fd.Close()
+}
+
+// Save file IVs to the disk
+func SaveFileIVs(file string) {
+	if atomic.SwapUint32(&ivChanged, 0) == 0 {
+		// If the IVs have not changed then don't do anything
+		return
+	}
+	// We first store the IVs in a temporary file and later rename it
+	tmp := file + ".tmp"
+	fd, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0400)
+	if err != nil {
+		tlog.Warn.Printf("Failed to store file IVs: %s", err.Error())
+		atomic.StoreUint32(&ivChanged, 1)
+		return
+	}
+	enc := gob.NewEncoder(fd)
+	inodeTable.Range(func(k, v interface{}) bool {
+		// First encode the key
+		err = enc.Encode(k)
+		if err != nil {
+			return false
+		}
+		// Then lock and encode the value
+		fileIVs := v.(*FileIVs)
+		fileIVs.lock.Lock()
+		err = enc.Encode(v)
+		fileIVs.lock.Unlock()
+		if err != nil {
+			return false
+		}
+		// No error, continue with next key-value pair
+		return true
+	})
+	// Abort immediately if something went wrong
+	if err != nil {
+		tlog.Warn.Printf("Failed to store file IVs: %s", err.Error())
+		atomic.StoreUint32(&ivChanged, 1)
+		fd.Close()
+		os.Remove(tmp)
+		return
+	}
+	// Otherwise close the file
+	err = fd.Close()
+	if err != nil {
+		tlog.Warn.Printf("Failed to store file IVs: %s", err.Error())
+		atomic.StoreUint32(&ivChanged, 1)
+		os.Remove(tmp)
+		return
+	}
+	// And rename it. If everything was successful set ivChanged to false
+	err = os.Rename(tmp, file)
+	if err != nil {
+		tlog.Warn.Printf("Failed to store file IVs: %s", err.Error())
+		atomic.StoreUint32(&ivChanged, 1)
+		os.Remove(tmp)
+	} else {
+		tlog.Debug.Printf("Successfully saved file IVs")
+	}
+}
+
+var started bool
+var quit chan bool
+var done chan bool
+
+// StartFileIVs first loads the file IVs from the disk and then starts a
+// subroutine to periodically save the IVs if they changed
+func StartFileIVs(file string) {
+	// Load previous state from the file
+	LoadFileIVs(file)
+	ivChanged = 0
+	// Create channels for shutdown
+	quit = make(chan bool, 1)
+	done = make(chan bool, 1)
+	started = true
+	// Start subroutine to periodically save IVs
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		for {
+			select {
+			case <- ticker.C:
+				SaveFileIVs(file)
+			case <- quit:
+				ticker.Stop()
+				SaveFileIVs(file)
+				done <- true
+				return
+			}
+		}
+	}()
+}
+
+// Save file IVs one last time and shutdown subroutine
+func StopFileIVs() {
+	if started {
+		quit <- true
+		<- done
+	}
 }

@@ -28,6 +28,8 @@ type argContainer struct {
 	// Configuration file name override
 	config             string
 	notifypid, scryptn int
+	// File IVs location on disk
+	fileivs            string
 	// Helper variables that are NOT cli options all start with an underscore
 	// _configCustom is true when the user sets a custom config file name.
 	_configCustom bool
@@ -137,6 +139,7 @@ func parseCliOpts() (args argContainer) {
 	flagSet.StringVar(&args.cpuprofile, "cpuprofile", "", "Write cpu profile to specified file")
 	flagSet.StringVar(&args.memprofile, "memprofile", "", "Write memory profile to specified file")
 	flagSet.StringVar(&args.config, "config", "", "Use specified config file instead of CIPHERDIR/gocryptfs.conf")
+	flagSet.StringVar(&args.fileivs, "fileivs", "", "Load/save file IVs to the given path")
 	flagSet.StringVar(&args.extpass, "extpass", "", "Use external program for the password prompt")
 	flagSet.StringVar(&args.passfile, "passfile", "", "Read password from file")
 	flagSet.StringVar(&args.ko, "ko", "", "Pass additional options directly to the kernel, comma-separated list")

@@ -28,6 +28,7 @@ import (
 	"github.com/rfjakob/gocryptfs/internal/fusefrontend_reverse"
 	"github.com/rfjakob/gocryptfs/internal/readpassword"
 	"github.com/rfjakob/gocryptfs/internal/tlog"
+	"github.com/rfjakob/gocryptfs/internal/pathiv"
 )
 
 // doMount mounts an encrypted directory.
@@ -153,6 +154,8 @@ func doMount(args *argContainer) int {
 	debug.FreeOSMemory()
 	// Jump into server loop. Returns when it gets an umount request from the kernel.
 	srv.Serve()
+	// In reverse mode, save the File IVs to disk and stop the subroutine
+	pathiv.StopFileIVs()
 	return 0
 }
 
@@ -237,6 +240,10 @@ func initFuseFrontend(masterkey []byte, args *argContainer, confFile *configfile
 		pathFsOpts.ClientInodes = false
 	}
 	if args.reverse {
+		// Load the cached File IVs
+		if args.fileivs != "" {
+			pathiv.StartFileIVs(args.fileivs)
+		}
 		// The dance with the intermediate variables is because we need to
 		// cast the FS into pathfs.FileSystem *and* ctlsock.Interface. This
 		// avoids using interface{}.

@@ -75,14 +75,16 @@ func (rf *reverseFile) encryptBlocks(plaintext []byte, firstBlockNo uint64) []by
 		inBlock := inBuf.Next(bs)
 		blockIV := rf.fileIVs.LockBlockIV(blockNo)
 		outBlock := rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, blockIV.IV)
+		var changed bool = false
 		if !bytes.Equal(blockIV.AuthData, outBlock[16:32]) {
 			// Authdata has changed, generate a new initialization vector
 			blockIV.IV = cryptocore.RandBytes(contentenc.DefaultIVBits / 8)
 			outBlock = rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, blockIV.IV)
 			blockIV.AuthData = make([]byte, 16)
 			copy(blockIV.AuthData, outBlock[16:32])
+			changed = true
 		}
-		rf.fileIVs.UnlockBlockIV()
+		rf.fileIVs.UnlockBlockIV(changed)
 		outBuf.Write(outBlock)
 	}
 	return outBuf.Bytes()
