@@ -42,6 +42,7 @@ type DevIno struct {
 
 type BlockIV struct {
 	IV       []byte
+	AuthData []byte
 }
 
 // FileIVs contains all IVs that are needed to create a file.
@@ -90,8 +91,8 @@ func DeriveFile(path string, st syscall.Stat_t) (fileIVs *FileIVs) {
 	return fileIVs
 }
 
-// BlockIV returns the block IV for block number "blockNo".
-func (fileIVs *FileIVs) BlockIV(blockNo uint64) []byte {
+// BlockIV returns the block IV and authData for block number "blockNo".
+func (fileIVs *FileIVs) LockBlockIV(blockNo uint64) *BlockIV {
 	fileIVs.lock.Lock()
 	// If blockNo >= len(fileIVs.blocks) then assume the file size has increased
 	// Append new BlockIV entries to the array. FIXME: Handle blockNo >= max int
@@ -101,9 +102,9 @@ func (fileIVs *FileIVs) BlockIV(blockNo uint64) []byte {
 		}
 		fileIVs.Blocks = append(fileIVs.Blocks, block)
 	}
-	// Copy and return the requrested IV
-	iv := make([]byte, contentenc.DefaultIVBits / 8)
-	copy(iv, fileIVs.Blocks[blockNo].IV)
+	return &fileIVs.Blocks[blockNo]
+}
+
+func (fileIVs *FileIVs) UnlockBlockIV() {
 	fileIVs.lock.Unlock()
-	return iv
 }

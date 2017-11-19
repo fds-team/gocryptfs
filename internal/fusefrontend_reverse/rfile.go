@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 
+	"github.com/rfjakob/gocryptfs/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/internal/contentenc"
 	"github.com/rfjakob/gocryptfs/internal/pathiv"
 	"github.com/rfjakob/gocryptfs/internal/tlog"
@@ -72,8 +73,16 @@ func (rf *reverseFile) encryptBlocks(plaintext []byte, firstBlockNo uint64) []by
 	bs := int(rf.contentEnc.PlainBS())
 	for blockNo := firstBlockNo; inBuf.Len() > 0; blockNo++ {
 		inBlock := inBuf.Next(bs)
-		iv := rf.fileIVs.BlockIV(blockNo)
-		outBlock := rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, iv)
+		blockIV := rf.fileIVs.LockBlockIV(blockNo)
+		outBlock := rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, blockIV.IV)
+		if !bytes.Equal(blockIV.AuthData, outBlock[16:32]) {
+			// Authdata has changed, generate a new initialization vector
+			blockIV.IV = cryptocore.RandBytes(contentenc.DefaultIVBits / 8)
+			outBlock = rf.contentEnc.EncryptBlockNonce(inBlock, blockNo, rf.fileIVs.ID, blockIV.IV)
+			blockIV.AuthData = make([]byte, 16)
+			copy(blockIV.AuthData, outBlock[16:32])
+		}
+		rf.fileIVs.UnlockBlockIV()
 		outBuf.Write(outBlock)
 	}
 	return outBuf.Bytes()
