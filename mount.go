@@ -242,7 +242,7 @@ func initFuseFrontend(masterkey []byte, args *argContainer, confFile *configfile
 	if args.reverse {
 		// Load the cached File IVs
 		if args.fileivs != "" {
-			pathiv.StartFileIVs(args.fileivs)
+			pathiv.StartFileIVs(args.fileivs, args.cipherdir)
 		}
 		// The dance with the intermediate variables is because we need to
 		// cast the FS into pathfs.FileSystem *and* ctlsock.Interface. This

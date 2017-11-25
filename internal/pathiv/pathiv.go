@@ -8,6 +8,7 @@ import (
 	"time"
 	"encoding/gob"
 	"crypto/sha256"
+	"path/filepath"
 	"sync/atomic"
 
 	// In newer Go versions, this has moved to just "sync/syncmap".
@@ -216,13 +217,42 @@ func SaveFileIVs(file string) {
 	}
 }
 
+// Prune file IVs by checking content of cipherdir
+func PruneFileIVs(cipherdir string) {
+	inodes := make(map[DevIno]bool)
+
+	err := filepath.Walk(cipherdir, func(path string, info os.FileInfo, err error) error {
+		var st syscall.Stat_t
+		if syscall.Stat(path, &st) == nil {
+			devino := DevIno{st.Dev, st.Ino}
+			inodes[devino] = true
+		}
+		return nil
+	})
+	if err != nil {
+		tlog.Warn.Printf("Failed to walk files in cipherdir: %s", err.Error())
+		return
+	}
+
+	inodeTable.Range(func(k, v interface{}) bool {
+		_, found := inodes[k.(DevIno)]
+		if !found {
+			tlog.Debug.Printf("ino%d: not found in cipherdir, dropping file IVs", k.(DevIno).Ino)
+			inodeTable.Delete(k)
+			atomic.StoreUint32(&ivChanged, 1)
+		}
+		// Continue with next key-value pair
+		return true
+	})
+}
+
 var started bool
 var quit chan bool
 var done chan bool
 
 // StartFileIVs first loads the file IVs from the disk and then starts a
 // subroutine to periodically save the IVs if they changed
-func StartFileIVs(file string) {
+func StartFileIVs(file string, cipherdir string) {
 	// Load previous state from the file
 	LoadFileIVs(file)
 	ivChanged = 0
@@ -232,13 +262,17 @@ func StartFileIVs(file string) {
 	started = true
 	// Start subroutine to periodically save IVs
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		save_ticker := time.NewTicker(60 * time.Second)
+		prune_ticker := time.NewTicker(60 * time.Minute)
 		for {
 			select {
-			case <- ticker.C:
+			case <- save_ticker.C:
 				SaveFileIVs(file)
+			case <- prune_ticker.C:
+				PruneFileIVs(cipherdir)
 			case <- quit:
-				ticker.Stop()
+				save_ticker.Stop()
+				prune_ticker.Stop()
 				SaveFileIVs(file)
 				done <- true
 				return
