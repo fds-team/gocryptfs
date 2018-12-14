@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	// In newer Go versions, this has moved to just "sync/syncmap".
-	"golang.org/x/sync/syncmap"
+	"golang.org/x/sys/unix"
 
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
@@ -32,7 +31,22 @@ type reverseFile struct {
 	contentEnc *contentenc.ContentEnc
 }
 
-var inodeTable syncmap.Map
+const xattrName = "user.gocryptfs.iv"
+
+func Fgetxattr(fd int, attr string) ([]byte, error) {
+	bufsz := 1024
+	for {
+		buf := make([]byte, bufsz)
+		bufsz, err := unix.Fgetxattr(fd, attr, buf)
+		if err == syscall.ERANGE {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return buf[:bufsz], nil
+	}
+}
 
 // newFile decrypts and opens the path "relPath" and returns a reverseFile
 // object. The backing file descriptor is always read-only.
@@ -72,29 +86,38 @@ func (rfs *ReverseFS) newFile(relPath string) (*reverseFile, fuse.Status) {
 		syscall.Close(fd)
 		return nil, fuse.ToStatus(syscall.EACCES)
 	}
-	// See if we have that inode number already in the table
-	// (even if Nlink has dropped to 1)
-	var derivedIVs pathiv.FileIVs
-	v, found := inodeTable.Load(st.Ino)
-	if found {
-		tlog.Debug.Printf("ino%d: newFile: found in the inode table", st.Ino)
-		derivedIVs = v.(pathiv.FileIVs)
-	} else {
-		derivedIVs = pathiv.DeriveFile(relPath)
-		// Nlink > 1 means there is more than one path to this file.
-		// Store the derived values so we always return the same data,
-		// regardless of the path that is used to access the file.
-		// This means that the first path wins.
-		if st.Nlink > 1 {
-			v, found = inodeTable.LoadOrStore(st.Ino, derivedIVs)
-			if found {
-				// Another thread has stored a different value before we could.
-				derivedIVs = v.(pathiv.FileIVs)
-			} else {
-				tlog.Debug.Printf("ino%d: newFile: Nlink=%d, stored in the inode table", st.Ino, st.Nlink)
-			}
+
+	var data []byte
+	for {
+		data, err = Fgetxattr(fd, xattrName)
+
+		if err == nil && !pathiv.ValidXattr(data, st) {
+			tlog.Warn.Printf("ino%d: newFile: corrupted xattr (copied from other file?)", st.Ino)
+			data = pathiv.CreateXattr(st)
+			err = unix.Fsetxattr(fd, xattrName, data, unix.XATTR_REPLACE)
+		}
+
+		if err == syscallcompat.ENOATTR {
+			data = pathiv.CreateXattr(st)
+			err = unix.Fsetxattr(fd, xattrName, data, unix.XATTR_CREATE)
+		}
+
+		if err != syscall.EEXIST {
+			break
 		}
 	}
+
+	var derivedIVs pathiv.FileIVs
+	if err == nil {
+		derivedIVs = pathiv.FromXattr(data)
+	} else if err == syscall.ENOTSUP {
+		derivedIVs = pathiv.DeriveFile(relPath)
+	} else {
+		tlog.Warn.Printf("ino%d: newFile: failed to get/set xattr", st.Ino)
+		syscall.Close(fd)
+		return nil, fuse.ToStatus(err)
+	}
+
 	header := contentenc.FileHeader{
 		Version: contentenc.CurrentVersion,
 		ID:      derivedIVs.ID,

@@ -357,7 +357,13 @@ func TestExampleFSv13reverse(t *testing.T) {
 	}
 	// Encrypted version of dir1/dir2/file (10000 zero bytes)
 	cPath = dirB + "/zOsW1-BUX54hC2hmhu2EOw/4ZqrpGQdw5r07KR1qw2ZeQ/tfCm9Sp9J_Dvc-jD7J6p8g"
-	want := "9818501d214c5eb42ca2472caf6c82a1"
+	err = syscall.Access(cPath, R_OK)
+	if err != nil {
+		t.Errorf("want nil, got: %v", err)
+	}
+	// Unencrypted version of dir1/dir2/file
+	cPath = dirC + "/dir1/dir2/file"
+	want := "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
 	actual := test_helpers.Md5fn(cPath)
 	if actual != want {
 		t.Errorf("wrong md5")
@@ -379,6 +385,81 @@ func TestExampleFSv13reverse(t *testing.T) {
 	if actual != want {
 		t.Errorf("wrong md5")
 	}
+	// Unmmount
+	test_helpers.UnmountPanic(dirC)
+	test_helpers.UnmountPanic(dirB)
+}
+
+// Test that IV stays the same when renaming files in reverse mode
+func TestExampleFSvXXreverse(t *testing.T) {
+	// Prepare directories
+	dirA := "v1.3-reverse"
+	dirB := test_helpers.TmpDir + "/" + dirA + ".D"
+	err := os.Mkdir(dirB, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirC := test_helpers.TmpDir + "/" + dirA + ".E"
+	err = os.Mkdir(dirC, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mount using password
+	test_helpers.MountOrFatal(t, dirA, dirB, "-reverse", "-extpass", "echo test", opensslOpt)
+	c := dirB + "/gocryptfs.conf"
+	if !test_helpers.VerifyExistence(c) {
+		t.Errorf("%s missing", c)
+	}
+	test_helpers.MountOrFatal(t, dirB, dirC, "-extpass", "echo test", opensslOpt)
+	// Test file paths
+	aPath := dirA + "/.testfile"
+	bPath := dirB + "/hYET-ZEfzl1FdXyzaaVyww"
+	cPath := dirC + "/.testfile"
+	// Create a temporary file in directory A
+	fd, err := os.OpenFile(aPath, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+	var buf [10000]byte
+	_, err = fd.WriteAt(buf[:], 0)
+	if err != nil {
+		t.Error(err)
+	}
+	fd.Close()
+	// Save the checksum of the intermediate file
+	encrypted1 := test_helpers.Md5fn(bPath)
+	// Check the unencrypted version
+	want := "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
+	actual := test_helpers.Md5fn(cPath)
+	if actual != want {
+		t.Errorf("wrong md5")
+	}
+	// Rename the file
+	err = os.Rename(aPath, dirA+"/.testfile2")
+	if err != nil {
+		t.Error(err)
+	}
+	// HACK: The following test fails if we keep dirC mounted
+	// all the time. What is causing the "Found linked inode,
+	// but Nlink == 1" error?
+	test_helpers.UnmountPanic(dirC)
+	test_helpers.MountOrFatal(t, dirB, dirC, "-extpass", "echo test", opensslOpt)
+	// Test file paths
+	aPath = dirA + "/.testfile2"
+	bPath = dirB + "/0X6OV39Pojw4eVta0TpicQ"
+	cPath = dirC + "/.testfile2"
+	// Save the checksum of the intermediate file
+	encrypted2 := test_helpers.Md5fn(bPath)
+	if encrypted1 != encrypted2 {
+		t.Errorf("Different IVs were used")
+	}
+	// Check the unencrypted version
+	want = "b85d6fb9ef4260dcf1ce0a1b0bff80d3"
+	actual = test_helpers.Md5fn(cPath)
+	if actual != want {
+		t.Errorf("wrong md5")
+	}
+	os.Remove(aPath)
 	// Unmmount
 	test_helpers.UnmountPanic(dirC)
 	test_helpers.UnmountPanic(dirB)

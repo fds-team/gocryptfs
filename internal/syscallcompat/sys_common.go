@@ -13,6 +13,9 @@ import (
 // It is not defined on Darwin, so we use the Linux value.
 const PATH_MAX = 4096
 
+// ENOATTR is not (yet) defined in Go
+const ENOATTR = syscall.ENODATA
+
 // Readlinkat is a convenience wrapper around unix.Readlinkat() that takes
 // care of buffer sizing. Implemented like os.Readlink().
 func Readlinkat(dirfd int, path string) (string, error) {

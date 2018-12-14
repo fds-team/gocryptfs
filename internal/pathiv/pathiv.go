@@ -3,7 +3,9 @@ package pathiv
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"syscall"
 
+	"github.com/rfjakob/gocryptfs/internal/cryptocore"
 	"github.com/rfjakob/gocryptfs/internal/nametransform"
 )
 
@@ -41,6 +43,29 @@ type FileIVs struct {
 func DeriveFile(path string) (fileIVs FileIVs) {
 	fileIVs.ID = Derive(path, PurposeFileID)
 	fileIVs.Block0IV = Derive(path, PurposeBlock0IV)
+	return fileIVs
+}
+
+func ValidXattr(data []byte, st syscall.Stat_t) bool {
+	if len(data) != 8+2*nametransform.DirIVLen {
+		return false
+	}
+	if binary.LittleEndian.Uint64(data[2*nametransform.DirIVLen:]) != st.Ino {
+		return false
+	}
+	return true
+}
+
+func CreateXattr(st syscall.Stat_t) (data []byte) {
+	data = make([]byte, 8+2*nametransform.DirIVLen)
+	copy(data, cryptocore.RandBytes(2*nametransform.DirIVLen))
+	binary.LittleEndian.PutUint64(data[2*nametransform.DirIVLen:], st.Ino)
+	return data
+}
+
+func FromXattr(data []byte) (fileIVs FileIVs) {
+	fileIVs.ID = data[0:nametransform.DirIVLen]
+	fileIVs.Block0IV = data[nametransform.DirIVLen : 2*nametransform.DirIVLen]
 	return fileIVs
 }
 
